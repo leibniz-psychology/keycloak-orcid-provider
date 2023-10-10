@@ -7,14 +7,14 @@
     <artifactId>keycloak-orcid-provider</artifactId>
     <groupId>org.keycloak.social</groupId>
     <packaging>jar</packaging>
-    <version>1.0.0-SNAPSHOT</version>
+    <version>1.0.0-22.0.4</version>
 
     <properties>
-        <java.version>11</java.version>
-        <keycloak.version>18.0.0</keycloak.version>
-        <version.compiler.maven.plugin>3.5.8</version.compiler.maven.plugin>
-        <maven.compiler.source>11</maven.compiler.source>
-        <maven.compiler.target>11</maven.compiler.target>
+        <java.version>17</java.version>
+        <keycloak.version>22.0.4</keycloak.version>
+        <version.compiler.maven.plugin>3.9.4</version.compiler.maven.plugin>
+        <maven.compiler.source>17</maven.compiler.source>
+        <maven.compiler.target>17</maven.compiler.target>
     </properties>
 
     <dependencies>
@@ -57,7 +57,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
-                <version>3.2.1</version>
+                <version>3.5.1</version>
                 <executions>
                     <execution>
                         <phase>package</phase>
@@ -70,7 +70,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.2.0</version>
+                <version>3.3.0</version>
                 <configuration>
                     <archive>
                         <manifestEntries>
