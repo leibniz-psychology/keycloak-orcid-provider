@@ -6,7 +6,7 @@ Ideally, imported e-mail addresses should be re-fetched on every login. This way
 However, for unknown reasons, this only works in the ORCiD sandbox.
 
 ## build
-### Docker
+### Docker / Podman
 ```
-docker run -it --rm --name keycloak-orcid-provider -v "$(pwd)":/usr/src/keycloak-orcid-provider -w /usr/src/keycloak-orcid-provider maven:3.8.5-jdk-11 mvn clean install
+docker run -it --rm --name keycloak-orcid-provider -v "$(pwd)":/usr/src/keycloak-orcid-provider -w /usr/src/keycloak-orcid-provider maven:3.9.4-amazoncorretto-17 mvn clean install
 ```
