@@ -76,6 +76,10 @@
                         <manifestEntries>
                             <Dependencies>org.keycloak.keycloak-services</Dependencies>
                         </manifestEntries>
+                        <manifestFile>src${file.separator}main${file.separator}resources${file.separator}META-INF${file.separator}MANIFEST.MF</manifestFile>
+                        <manifest>
+                            <addDefaultImplementationEntries>true</addDefaultImplementationEntries>
+                        </manifest>
                     </archive>
                 </configuration>
             </plugin>

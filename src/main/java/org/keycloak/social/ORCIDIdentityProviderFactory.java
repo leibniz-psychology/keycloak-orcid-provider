@@ -22,11 +22,13 @@ import org.keycloak.models.IdentityProviderModel;
 import org.keycloak.broker.social.SocialIdentityProviderFactory;
 import org.keycloak.models.KeycloakSession;
 import org.keycloak.social.paypal.PayPalIdentityProviderConfig;
+import java.util.Map;
+import org.keycloak.provider.ServerInfoAwareProviderFactory;
 
 /**
  * @author Marc Schulz-Narres
  */
-public class ORCIDIdentityProviderFactory extends AbstractIdentityProviderFactory<ORCIDIdentityProvider> implements SocialIdentityProviderFactory<ORCIDIdentityProvider> {
+public class ORCIDIdentityProviderFactory extends AbstractIdentityProviderFactory<ORCIDIdentityProvider> implements SocialIdentityProviderFactory<ORCIDIdentityProvider>, ServerInfoAwareProviderFactory {
 
     public static final String PROVIDER_ID = "orcid";
 
@@ -49,5 +51,18 @@ public class ORCIDIdentityProviderFactory extends AbstractIdentityProviderFactor
     @Override
     public String getId() {
         return PROVIDER_ID;
+    }
+
+    /**
+     * Gladly copied from https://github.com/sventorben/keycloak-home-idp-discovery/blob/7c5691000afc95db1a3a5527e296c50aa79c08e3/src/main/java/de/sventorben/keycloak/authentication/hidpd/HomeIdpDiscoveryAuthenticatorFactory.java#L86C1-L94C6
+     * @author Manuel Biertz
+     */
+    @Override
+    public Map<String, String> getOperationalInfo() {
+        String version = getClass().getPackage().getImplementationVersion();
+        if (version == null) {
+            version = "dev-snapshot";
+        }
+        return Map.of("Version", version);
     }
 }
