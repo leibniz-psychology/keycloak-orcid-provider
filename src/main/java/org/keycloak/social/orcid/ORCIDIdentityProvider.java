@@ -39,6 +39,7 @@ import org.keycloak.common.ClientConnection;
 import org.keycloak.common.util.KeycloakUriBuilder;
 import org.keycloak.events.EventBuilder;
 import org.keycloak.models.KeycloakSession;
+import org.keycloak.social.orcid.ORCIDIdentityProviderConfig;
 import org.keycloak.util.JsonSerialization;
 import org.keycloak.services.ErrorResponseException;
 import org.keycloak.representations.JsonWebToken;
@@ -90,7 +91,8 @@ public class ORCIDIdentityProvider extends OIDCIdentityProvider implements Socia
     protected BrokeredIdentityContext extractIdentity(AccessTokenResponse tokenResponse, String accessToken, JsonWebToken idToken) throws IOException {
         logger.debug("extractIdentity");
         String id = idToken.getSubject();
-        BrokeredIdentityContext identity = new BrokeredIdentityContext(id);
+        ORCIDIdentityProviderConfig config = (ORCIDIdentityProviderConfig) this.getConfig();
+        BrokeredIdentityContext identity = new BrokeredIdentityContext(id, config.getModel());
         BrokeredIdentityContext identityNew = null;
         String name = (String) idToken.getOtherClaims().get(IDToken.NAME);
         String preferredUsername = (String) idToken.getOtherClaims().get(getusernameClaimNameForIdToken());
@@ -157,7 +159,8 @@ public class ORCIDIdentityProvider extends OIDCIdentityProvider implements Socia
         logger.debug("ORCIDextractIdentity");
 		String id = getJsonProperty(profile, "sub");
 
-		BrokeredIdentityContext identity = new BrokeredIdentityContext(id);
+        ORCIDIdentityProviderConfig config = (ORCIDIdentityProviderConfig) this.getConfig();
+        BrokeredIdentityContext identity = new BrokeredIdentityContext(id, config.getModel());
 
 		String given_name = getJsonProperty(profile, "given_name");
 		String family_name = getJsonProperty(profile, "family_name");

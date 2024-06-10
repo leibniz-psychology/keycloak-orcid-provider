@@ -24,8 +24,11 @@ import org.keycloak.models.IdentityProviderModel;
  */
 public class ORCIDIdentityProviderConfig extends OIDCIdentityProviderConfig {
 
+    private IdentityProviderModel model = null;
+
     public ORCIDIdentityProviderConfig(IdentityProviderModel model) {
         super(model);
+        this.model = model;
     }
 
     public ORCIDIdentityProviderConfig() {
@@ -48,4 +51,7 @@ public class ORCIDIdentityProviderConfig extends OIDCIdentityProviderConfig {
         getConfig().put("emailurl", String.valueOf(emailurl));
     }
 
+    public IdentityProviderModel getModel() {
+        return model;
+    }
 }
