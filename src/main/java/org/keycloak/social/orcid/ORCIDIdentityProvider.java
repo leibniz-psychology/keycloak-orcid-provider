@@ -92,7 +92,7 @@ public class ORCIDIdentityProvider extends OIDCIdentityProvider implements Socia
         logger.debug("extractIdentity");
         String id = idToken.getSubject();
         ORCIDIdentityProviderConfig config = (ORCIDIdentityProviderConfig) this.getConfig();
-        BrokeredIdentityContext identity = new BrokeredIdentityContext(id);
+        BrokeredIdentityContext identity = new BrokeredIdentityContext(id, config.getModel());
         BrokeredIdentityContext identityNew = null;
         String name = (String) idToken.getOtherClaims().get(IDToken.NAME);
         String preferredUsername = (String) idToken.getOtherClaims().get(getusernameClaimNameForIdToken());
@@ -160,7 +160,7 @@ public class ORCIDIdentityProvider extends OIDCIdentityProvider implements Socia
 		String id = getJsonProperty(profile, "sub");
 
         ORCIDIdentityProviderConfig config = (ORCIDIdentityProviderConfig) this.getConfig();
-        BrokeredIdentityContext identity = new BrokeredIdentityContext(id);
+        BrokeredIdentityContext identity = new BrokeredIdentityContext(id, config.getModel());
 
 		String given_name = getJsonProperty(profile, "given_name");
 		String family_name = getJsonProperty(profile, "family_name");
