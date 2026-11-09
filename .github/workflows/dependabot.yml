@@ -18,11 +18,13 @@ jobs:
     concurrency:
       group: dependabot-version-allocation
       cancel-in-progress: false
+      queue: max
     if: >-
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.event.action != 'closed' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    timeout-minutes: 355
     permissions:
       actions: write
       contents: write
@@ -70,16 +72,31 @@ jobs:
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_SHA: ${{ steps.version.outputs.head_sha || github.event.pull_request.head.sha }}
         run: |
+          RUN_IDS_BEFORE=$(gh run list \
+            --workflow build.yml \
+            --event workflow_dispatch \
+            --branch "$HEAD_REF" \
+            --commit "$HEAD_SHA" \
+            --limit 100 \
+            --json databaseId \
+            --jq '.[].databaseId')
           gh workflow run build.yml --ref "$HEAD_REF"
           for attempt in {1..60}; do
-            RUN_ID=$(gh run list \
+            RUN_IDS=$(gh run list \
               --workflow build.yml \
               --event workflow_dispatch \
               --branch "$HEAD_REF" \
               --commit "$HEAD_SHA" \
-              --limit 1 \
+              --limit 100 \
               --json databaseId \
-              --jq '.[0].databaseId // empty')
+              --jq '.[].databaseId')
+            RUN_ID=
+            while IFS= read -r candidate; do
+              if [[ -n "$candidate" ]] && ! grep -Fxq "$candidate" <<< "$RUN_IDS_BEFORE"; then
+                RUN_ID=$candidate
+                break
+              fi
+            done <<< "$RUN_IDS"
             if [[ -n "$RUN_ID" ]]; then
               break
             fi
@@ -91,7 +108,7 @@ jobs:
             exit 1
           fi
           gh run watch "$RUN_ID" --exit-status
-      - name: Enable auto-merge
+      - name: Enable auto-merge and wait for merge
         if: steps.metadata.outputs.update-type != 'version-update:semver-major'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -100,21 +117,29 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ steps.version.outputs.head_sha || github.event.pull_request.head.sha }}
         run: |
+          MERGED=false
+          cleanup_auto_merge() {
+            status=$?
+            trap - EXIT
+            if [[ "$MERGED" != true ]]; then
+              gh pr merge --disable-auto "$PR_URL" || {
+                echo "Failed to disable auto-merge for ${PR_URL}." >&2
+              }
+            fi
+            exit "$status"
+          }
+          trap cleanup_auto_merge EXIT
+          trap 'exit 1' INT TERM
           gh pr merge --auto --squash --match-head-commit "$HEAD_SHA" "$PR_URL"
           gh workflow run dependabot.yml \
             --ref "$DEFAULT_BRANCH" \
             --field "tag_pr_number=$PR_NUMBER"
-      - name: Wait for pull request merge
-        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-        run: |
           for attempt in {1..360}; do
             DETAILS=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
               --jq '[.merged, .state] | @tsv')
             read -r MERGED STATE <<< "$DETAILS"
             if [[ "$MERGED" == true ]]; then
+              MERGED=true
               exit 0
             fi
             if [[ "$STATE" == closed ]]; then
@@ -174,6 +199,11 @@ jobs:
           MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
         run: |
           VERSION=$(python3 -c 'import re, xml.etree.ElementTree as ET; root = ET.parse("pom.xml").getroot(); ns = {"m": "http://maven.apache.org/POM/4.0.0"}; version = root.findtext("m:version", namespaces=ns); assert version and re.fullmatch(r"\d+\.\d+\.\d+-[0-9A-Za-z.+-]+", version), f"Unexpected project version: {version!r}"; print(version)')
+          PARENT_VERSION=$(git show "${MERGE_SHA}^:pom.xml" | python3 -c 'import xml.etree.ElementTree as ET, sys; root = ET.parse(sys.stdin); ns = {"m": "http://maven.apache.org/POM/4.0.0"}; print(root.findtext("m:version", namespaces=ns) or "")')
+          if [[ "$VERSION" == "$PARENT_VERSION" ]]; then
+            echo "Project version is unchanged; skipping tag for ${MERGE_SHA}."
+            exit 0
+          fi
           TAG="v${VERSION}"
           EXISTING=$(git ls-remote --tags origin "refs/tags/${TAG}" "refs/tags/${TAG}^{}")
           if [[ -n "$EXISTING" ]]; then
