@@ -3,6 +3,12 @@ name: Dependabot
 on:
   pull_request_target:
     types: [opened, reopened, synchronize, closed]
+  workflow_dispatch:
+    inputs:
+      tag_pr_number:
+        description: Dependabot pull request number to tag after merging
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -86,26 +92,61 @@ jobs:
         if: steps.metadata.outputs.update-type != 'version-update:semver-major'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge --auto --squash "$PR_URL"
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr merge --auto --squash "$PR_URL"
+          gh workflow run dependabot.yml \
+            --ref "$DEFAULT_BRANCH" \
+            --field "tag_pr_number=$PR_NUMBER"
 
   tag:
     if: >-
+      (github.event_name == 'pull_request_target' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.action == 'closed' &&
-      github.event.pull_request.merged == true
+      github.event.pull_request.merged == true) ||
+      (github.event_name == 'workflow_dispatch' &&
+      inputs.tag_pr_number != '')
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     permissions:
       contents: write
+      pull-requests: read
     steps:
+      - id: merge
+        name: Wait for pull request merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: >-
+            ${{ inputs.tag_pr_number ||
+                github.event.pull_request.number }}
+        run: |
+          for attempt in {1..360}; do
+            DETAILS=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq '[.merged, .state, .merge_commit_sha] | @tsv')
+            read -r MERGED STATE MERGE_SHA <<< "$DETAILS"
+            if [[ "$MERGED" == true ]]; then
+              echo "merge_sha=$MERGE_SHA" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [[ "$STATE" == closed ]]; then
+              echo "Pull request #${PR_NUMBER} closed without merging." >&2
+              exit 1
+            fi
+            sleep 60
+          done
+          echo "Timed out waiting for pull request #${PR_NUMBER} to merge." >&2
+          exit 1
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          ref: ${{ steps.merge.outputs.merge_sha }}
           fetch-depth: 0
       - name: Tag merged version
         env:
-          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
         run: |
           VERSION=$(python3 -c 'import re, xml.etree.ElementTree as ET; root = ET.parse("pom.xml").getroot(); ns = {"m": "http://maven.apache.org/POM/4.0.0"}; version = root.findtext("m:version", namespaces=ns); assert version and re.fullmatch(r"\d+\.\d+\.\d+-[0-9A-Za-z.+-]+", version), f"Unexpected project version: {version!r}"; print(version)')
           TAG="v${VERSION}"
