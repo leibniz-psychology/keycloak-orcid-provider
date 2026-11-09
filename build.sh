@@ -1,5 +1,6 @@
 DOCKER_BIN=/usr/bin/docker
 PODMAN_BIN=/usr/bin/podman
+OCI_FQIN=docker.io/maven:3.9-amazoncorretto-17
 
 if ( which podman > /dev/null 2>&1 ); then
         OCI_RUNTIME_BIN=$PODMAN_BIN
@@ -8,14 +9,14 @@ elif ( which docker > /dev/null 2>&1 ); then
         OCI_RUNTIME_BIN=$DOCKER_BIN
 else
         echo "Neither Podman nor Docker available. Exiting."
-        exit;
+        exit 1;
 fi
 
 build () {
         if [ $OCI_RUNTIME_BIN == $PODMAN_BIN ]; then
-		$OCI_RUNTIME_BIN run -it --name keycloak-orcid-provider --pull always --rm --security-opt label=disable -v "$(pwd)":/usr/src/keycloak-orcid-provider -w /usr/src/keycloak-orcid-provider maven:3.9-amazoncorretto-17 mvn clean install
+		$OCI_RUNTIME_BIN run -it --name keycloak-orcid-provider --pull always --rm --security-opt label=disable -v "$(pwd)":/usr/src/keycloak-orcid-provider -w /usr/src/keycloak-orcid-provider ${OCI_FQIN} mvn clean install
         else
-		$OCI_RUNTIME_BIN run -it --name keycloak-orcid-provider --pull always --rm -v "$(pwd)":/usr/src/keycloak-orcid-provider -w /usr/src/keycloak-orcid-provider maven:3.9-amazoncorretto-17 mvn clean install
+		$OCI_RUNTIME_BIN run -it --name keycloak-orcid-provider --pull always --rm -v "$(pwd)":/usr/src/keycloak-orcid-provider -w /usr/src/keycloak-orcid-provider ${OCI_FQIN} mvn clean install
         fi
 }
 
