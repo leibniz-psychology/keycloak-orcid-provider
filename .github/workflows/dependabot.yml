@@ -15,6 +15,9 @@ permissions:
 
 jobs:
   prepare:
+    concurrency:
+      group: dependabot-version-allocation
+      cancel-in-progress: false
     if: >-
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.event.action != 'closed' &&
@@ -61,11 +64,11 @@ jobs:
             echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           fi
       - name: Validate updated pull request
-        if: steps.version.outputs.updated == 'true'
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          HEAD_SHA: ${{ steps.version.outputs.head_sha }}
+          HEAD_SHA: ${{ steps.version.outputs.head_sha || github.event.pull_request.head.sha }}
         run: |
           gh workflow run build.yml --ref "$HEAD_REF"
           for attempt in {1..60}; do
@@ -95,11 +98,33 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           PR_URL: ${{ github.event.pull_request.html_url }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ steps.version.outputs.head_sha || github.event.pull_request.head.sha }}
         run: |
-          gh pr merge --auto --squash "$PR_URL"
+          gh pr merge --auto --squash --match-head-commit "$HEAD_SHA" "$PR_URL"
           gh workflow run dependabot.yml \
             --ref "$DEFAULT_BRANCH" \
             --field "tag_pr_number=$PR_NUMBER"
+      - name: Wait for pull request merge
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          for attempt in {1..360}; do
+            DETAILS=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq '[.merged, .state] | @tsv')
+            read -r MERGED STATE <<< "$DETAILS"
+            if [[ "$MERGED" == true ]]; then
+              exit 0
+            fi
+            if [[ "$STATE" == closed ]]; then
+              echo "Pull request #${PR_NUMBER} closed without merging." >&2
+              exit 1
+            fi
+            sleep 60
+          done
+          echo "Timed out waiting for pull request #${PR_NUMBER} to merge." >&2
+          exit 1
 
   tag:
     if: >-
