@@ -1,0 +1,88 @@
+name: Dependabot
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Update project version
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: |
+          git show "${BASE_SHA}:.github/scripts/update-dependabot-version.py" > "$RUNNER_TEMP/update-dependabot-version.py"
+          python3 "$RUNNER_TEMP/update-dependabot-version.py"
+          if ! git diff --quiet -- pom.xml; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add pom.xml
+            git commit -m "Update project version for Dependabot"
+            git push origin "HEAD:refs/heads/${HEAD_REF}"
+          fi
+      - name: Enable auto-merge
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --auto --squash "$PR_URL"
+
+  tag:
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+      - name: Tag merged version
+        env:
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          VERSION=$(python3 -c 'import re, xml.etree.ElementTree as ET; root = ET.parse("pom.xml").getroot(); ns = {"m": "http://maven.apache.org/POM/4.0.0"}; version = root.findtext("m:version", namespaces=ns); assert version and re.fullmatch(r"\d+\.\d+\.\d+-[0-9A-Za-z.+-]+", version), f"Unexpected project version: {version!r}"; print(version)')
+          TAG="v${VERSION}"
+          EXISTING=$(git ls-remote --tags origin "refs/tags/${TAG}" "refs/tags/${TAG}^{}")
+          if [[ -n "$EXISTING" ]]; then
+            TAG_TARGET=$(printf '%s\n' "$EXISTING" | awk '$2 ~ /\^\{\}$/ {print $1; exit}')
+            if [[ -z "$TAG_TARGET" ]]; then
+              TAG_TARGET=$(printf '%s\n' "$EXISTING" | awk 'NR == 1 {print $1}')
+            fi
+            [[ "$TAG_TARGET" == "$MERGE_SHA" ]] || {
+              echo "Tag ${TAG} already points to ${TAG_TARGET}, not ${MERGE_SHA}" >&2
+              exit 1
+            }
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" "$MERGE_SHA" -m "$TAG"
+          git push origin "refs/tags/${TAG}"
