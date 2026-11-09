@@ -34,6 +34,10 @@ jobs:
           DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
           UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
         run: |
+          if ! git merge-base --is-ancestor "${BASE_SHA}" HEAD; then
+            echo "::error::Dependabot pull request must be updated with the latest base before version allocation."
+            exit 1
+          fi
           git show "${BASE_SHA}:.github/scripts/update-dependabot-version.py" > "$RUNNER_TEMP/update-dependabot-version.py"
           python3 "$RUNNER_TEMP/update-dependabot-version.py"
           if ! git diff --quiet -- pom.xml; then
