@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Validate release version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+          import xml.etree.ElementTree as ET
+
+          tag = os.environ["TAG"]
+          number = r"(?:0|[1-9][0-9]*)"
+          semver = rf"{number}\.{number}\.{number}"
+          if not re.fullmatch(rf"v{semver}-{semver}", tag):
+              print("::notice::Tag is not in vSEMVER-SEMVER format; skipping release.")
+              sys.exit(0)
+
+          root = ET.parse("pom.xml").getroot()
+          version = root.findtext("{http://maven.apache.org/POM/4.0.0}version")
+          if tag[1:] != version:
+              print("::error::Tag version does not match the project version in pom.xml.")
+              sys.exit(1)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"version={version}\n")
+          PY
+      - name: Run build script
+        if: steps.version.outputs.version != ''
+        run: script -q -e -c 'bash build.sh' /dev/null
+      - name: Create release and upload JAR
+        if: steps.version.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$TAG" \
+            "target/keycloak-orcid-provider-${VERSION}.jar" \
+            --verify-tag \
+            --title "$TAG" \
+            --generate-notes
