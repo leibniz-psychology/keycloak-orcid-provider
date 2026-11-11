@@ -1,0 +1,223 @@
+name: Dependabot
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
+  workflow_dispatch:
+    inputs:
+      tag_pr_number:
+        description: Dependabot pull request number to tag after merging
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    concurrency:
+      group: dependabot-version-allocation
+      cancel-in-progress: false
+      queue: max
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - id: version
+        name: Update project version
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          DEPENDENCY_NAMES: ${{ steps.metadata.outputs.dependency-names }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: |
+          git fetch origin "${BASE_REF}"
+          BASE_SHA=$(git rev-parse FETCH_HEAD)
+          if ! git merge-base --is-ancestor "${BASE_SHA}" HEAD; then
+            echo "::error::Dependabot pull request must be updated with the latest base before version allocation."
+            exit 1
+          fi
+          git show "${BASE_SHA}:.github/scripts/update-dependabot-version.py" > "$RUNNER_TEMP/update-dependabot-version.py"
+          python3 "$RUNNER_TEMP/update-dependabot-version.py"
+          if ! git diff --quiet -- pom.xml; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add pom.xml
+            git commit -m "Update project version for Dependabot"
+            git push origin "HEAD:refs/heads/${HEAD_REF}"
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+            echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Validate updated pull request
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ steps.version.outputs.head_sha || github.event.pull_request.head.sha }}
+        run: |
+          RUN_IDS_BEFORE=$(gh run list \
+            --workflow build.yml \
+            --event workflow_dispatch \
+            --branch "$HEAD_REF" \
+            --commit "$HEAD_SHA" \
+            --limit 100 \
+            --json databaseId \
+            --jq '.[].databaseId')
+          gh workflow run build.yml --ref "$HEAD_REF"
+          for attempt in {1..60}; do
+            RUN_IDS=$(gh run list \
+              --workflow build.yml \
+              --event workflow_dispatch \
+              --branch "$HEAD_REF" \
+              --commit "$HEAD_SHA" \
+              --limit 100 \
+              --json databaseId \
+              --jq '.[].databaseId')
+            RUN_ID=
+            while IFS= read -r candidate; do
+              if [[ -n "$candidate" ]] && ! grep -Fxq "$candidate" <<< "$RUN_IDS_BEFORE"; then
+                RUN_ID=$candidate
+                break
+              fi
+            done <<< "$RUN_IDS"
+            if [[ -n "$RUN_ID" ]]; then
+              break
+            fi
+            sleep 5
+          done
+          if [[ -z "$RUN_ID" ]]; then
+            printf '::error::Timed out waiting for Build validation of %s.\n' \
+              "$HEAD_SHA"
+            exit 1
+          fi
+          gh run watch "$RUN_ID" --exit-status
+      - name: Enable auto-merge and wait for merge
+        if: steps.metadata.outputs.update-type != 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ steps.version.outputs.head_sha || github.event.pull_request.head.sha }}
+        run: |
+          MERGED=false
+          cleanup_auto_merge() {
+            status=$?
+            trap - EXIT
+            if [[ "$MERGED" != true ]]; then
+              gh pr merge --disable-auto "$PR_URL" || {
+                echo "Failed to disable auto-merge for ${PR_URL}." >&2
+              }
+            fi
+            exit "$status"
+          }
+          trap cleanup_auto_merge EXIT
+          trap 'exit 1' INT TERM
+          gh pr merge --auto --squash --match-head-commit "$HEAD_SHA" "$PR_URL"
+          gh workflow run dependabot.yml \
+            --ref "$DEFAULT_BRANCH" \
+            --field "tag_pr_number=$PR_NUMBER"
+          for attempt in {1..360}; do
+            DETAILS=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq '[.merged, .state] | @tsv')
+            read -r MERGED STATE <<< "$DETAILS"
+            if [[ "$MERGED" == true ]]; then
+              MERGED=true
+              exit 0
+            fi
+            if [[ "$STATE" == closed ]]; then
+              echo "Pull request #${PR_NUMBER} closed without merging." >&2
+              exit 1
+            fi
+            sleep 60
+          done
+          echo "Timed out waiting for pull request #${PR_NUMBER} to merge." >&2
+          exit 1
+
+  tag:
+    if: >-
+      (github.event_name == 'pull_request_target' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true) ||
+      (github.event_name == 'workflow_dispatch' &&
+      inputs.tag_pr_number != '')
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: write
+      pull-requests: read
+    steps:
+      - id: merge
+        name: Wait for pull request merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: >-
+            ${{ inputs.tag_pr_number ||
+                github.event.pull_request.number }}
+        run: |
+          for attempt in {1..360}; do
+            DETAILS=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" \
+              --jq '[.merged, .state, .merge_commit_sha] | @tsv')
+            read -r MERGED STATE MERGE_SHA <<< "$DETAILS"
+            if [[ "$MERGED" == true ]]; then
+              echo "merge_sha=$MERGE_SHA" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [[ "$STATE" == closed ]]; then
+              echo "Pull request #${PR_NUMBER} closed without merging." >&2
+              exit 1
+            fi
+            sleep 60
+          done
+          echo "Timed out waiting for pull request #${PR_NUMBER} to merge." >&2
+          exit 1
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.merge.outputs.merge_sha }}
+          fetch-depth: 0
+      - name: Tag merged version
+        env:
+          MERGE_SHA: ${{ steps.merge.outputs.merge_sha }}
+        run: |
+          VERSION=$(python3 -c 'import re, xml.etree.ElementTree as ET; root = ET.parse("pom.xml").getroot(); ns = {"m": "http://maven.apache.org/POM/4.0.0"}; version = root.findtext("m:version", namespaces=ns); assert version and re.fullmatch(r"\d+\.\d+\.\d+-[0-9A-Za-z.+-]+", version), f"Unexpected project version: {version!r}"; print(version)')
+          PARENT_VERSION=$(git show "${MERGE_SHA}^:pom.xml" | python3 -c 'import xml.etree.ElementTree as ET, sys; root = ET.parse(sys.stdin); ns = {"m": "http://maven.apache.org/POM/4.0.0"}; print(root.findtext("m:version", namespaces=ns) or "")')
+          if [[ "$VERSION" == "$PARENT_VERSION" ]]; then
+            echo "Project version is unchanged; skipping tag for ${MERGE_SHA}."
+            exit 0
+          fi
+          TAG="v${VERSION}"
+          EXISTING=$(git ls-remote --tags origin "refs/tags/${TAG}" "refs/tags/${TAG}^{}")
+          if [[ -n "$EXISTING" ]]; then
+            TAG_TARGET=$(printf '%s\n' "$EXISTING" | awk '$2 ~ /\^\{\}$/ {print $1; exit}')
+            if [[ -z "$TAG_TARGET" ]]; then
+              TAG_TARGET=$(printf '%s\n' "$EXISTING" | awk 'NR == 1 {print $1}')
+            fi
+            [[ "$TAG_TARGET" == "$MERGE_SHA" ]] || {
+              echo "Tag ${TAG} already points to ${TAG_TARGET}, not ${MERGE_SHA}" >&2
+              exit 1
+            }
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" "$MERGE_SHA" -m "$TAG"
+          git push origin "refs/tags/${TAG}"
