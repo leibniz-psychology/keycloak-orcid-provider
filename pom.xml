@@ -7,7 +7,7 @@
     <artifactId>keycloak-orcid-provider</artifactId>
     <groupId>org.keycloak.social</groupId>
     <packaging>jar</packaging>
-    <version>1.4.6-26.8.1</version>
+    <version>1.4.6-26.8.2</version>
 
     <properties>
         <java.version>17</java.version>
